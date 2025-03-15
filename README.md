@@ -1,5 +1,7 @@
 # Docx MCP Service
 
+[English](README.md) | [中文](README_ZH.md)
+
 A Docx document processing service based on the FastMCP library, supporting the creation, editing, and management of Word documents using AI assistants in Cursor.
 
 ## Features
