@@ -2,9 +2,9 @@
 # -*- coding: utf-8 -*-
 
 """
-MCP Docx处理服务
-提供docx文档的各种操作，包括查询、添加、修改、删除，以及字体样式设置等
-使用官方MCP库实现
+MCP Docx Processing Service
+Provides various operations for docx documents, including querying, adding, modifying, deleting, and font style settings
+Implemented using the official MCP library
 """
 
 import os
@@ -22,7 +22,7 @@ from docx.enum.style import WD_STYLE_TYPE
 from docx.oxml.ns import qn
 from docx.oxml import OxmlElement
 
-# 配置日志
+# Configure logging
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -33,22 +33,22 @@ logging.basicConfig(
 )
 logger = logging.getLogger("DocxMCPServer")
 
-# 创建一个状态文件，用于在MCP服务重启时恢复状态
+# Create a state file for restoring state when MCP service restarts
 CURRENT_DOC_FILE = os.path.join(tempfile.gettempdir(), "docx_mcp_current_doc.txt")
 
 class DocxProcessor:
-    """处理Docx文档的类，实现各种文档操作"""
+    """Class for processing Docx documents, implementing various document operations"""
     
     def __init__(self):
-        self.documents = {}  # 存储已打开的文档
+        self.documents = {}  # Store opened documents
         self.current_document = None
         self.current_file_path = None
         
-        # 尝试从标记文件加载当前文档
+        # Try to load current document from state file
         self._load_current_document()
     
     def _load_current_document(self):
-        """从标记文件加载当前文档"""
+        """Load current document from state file"""
         if not os.path.exists(CURRENT_DOC_FILE):
             return False
         
@@ -57,17 +57,39 @@ class DocxProcessor:
                 file_path = f.read().strip()
             
             if file_path and os.path.exists(file_path):
-                self.current_file_path = file_path
-                self.current_document = Document(file_path)
-                self.documents[file_path] = self.current_document
-                return True
+                try:
+                    self.current_file_path = file_path
+                    self.current_document = Document(file_path)
+                    self.documents[file_path] = self.current_document
+                    return True
+                except Exception as e:
+                    logger.error(f"Failed to load document at {file_path}: {e}")
+                    # Delete invalid state file to prevent future loading attempts
+                    try:
+                        os.remove(CURRENT_DOC_FILE)
+                        logger.info(f"Removed invalid state file pointing to {file_path}")
+                    except Exception as e_remove:
+                        logger.error(f"Failed to remove state file: {e_remove}")
+            else:
+                # Delete invalid state file if path is empty or file doesn't exist
+                try:
+                    os.remove(CURRENT_DOC_FILE)
+                    logger.info("Removed invalid state file with non-existent document path")
+                except Exception as e_remove:
+                    logger.error(f"Failed to remove state file: {e_remove}")
         except Exception as e:
-            logger.error(f"加载当前文档失败: {e}")
+            logger.error(f"Failed to load current document: {e}")
+            # Delete corrupted state file
+            try:
+                os.remove(CURRENT_DOC_FILE)
+                logger.info("Removed corrupted state file")
+            except Exception as e_remove:
+                logger.error(f"Failed to remove state file: {e_remove}")
         
         return False
     
     def _save_current_document(self):
-        """保存当前文档路径到标记文件"""
+        """Save current document path to state file"""
         if not self.current_file_path:
             return False
         
@@ -76,111 +98,114 @@ class DocxProcessor:
                 f.write(self.current_file_path)
             return True
         except Exception as e:
-            logger.error(f"保存当前文档路径失败: {e}")
+            logger.error(f"Failed to save current document path: {e}")
         
         return False
     
     def save_state(self):
-        """保存处理器状态"""
-        # 保存当前文档
+        """Save processor state"""
+        # Save current document
         if self.current_document and self.current_file_path:
             try:
                 self.current_document.save(self.current_file_path)
                 self._save_current_document()
             except Exception as e:
-                logger.error(f"保存当前文档失败: {e}")
+                logger.error(f"Failed to save current document: {e}")
     
     def load_state(self):
-        """加载处理器状态"""
+        """Load processor state"""
         self._load_current_document()
 
-    # ... 保留原有的所有文档处理方法 ...
+    # ... Keep all original document processing methods ...
 
-# 创建全局的处理器实例
+# Create global processor instance
 processor = DocxProcessor()
 
 @asynccontextmanager
 async def server_lifespan(server: FastMCP) -> AsyncIterator[Dict[str, Any]]:
-    """管理服务器生命周期"""
+    """Manage server lifecycle"""
     try:
-        # 服务器启动时加载状态
-        logger.info("DocxProcessor MCP服务器启动中...")
-        processor.load_state()
+        # Start server with clean state
+        logger.info("DocxProcessor MCP server starting with clean state...")
+        # Do not attempt to load any previous state
         yield {"processor": processor}
     finally:
-        # 服务器关闭时保存状态
-        logger.info("DocxProcessor MCP服务器关闭中...")
-        processor.save_state()
+        # Save state when server shuts down
+        logger.info("DocxProcessor MCP server shutting down...")
+        if processor.current_document and processor.current_file_path:
+            processor.save_state()
+        else:
+            logger.info("No document open, not saving state")
 
-# 创建MCP服务器
+# Create MCP server
 mcp = FastMCP(
     name="DocxProcessor",
-    instructions="Word文档处理服务，提供创建、编辑、查询文档的功能",
+    instructions="Word document processing service, providing functions to create, edit, and query documents",
     lifespan=server_lifespan
 )
 
 @mcp.tool()
 def create_document(ctx: Context, file_path: str) -> str:
     """
-    创建一个新的Word文档
+    Create a new Word document
     
     Parameters:
-    - file_path: 文档保存路径
+    - file_path: Document save path
     """
     try:
         processor.current_document = Document()
         processor.current_file_path = file_path
         processor.documents[file_path] = processor.current_document
         
-        # 保存文档
+        # Save document
         processor.current_document.save(file_path)
         
-        return f"成功创建文档: {file_path}"
+        return f"Document created successfully: {file_path}"
     except Exception as e:
-        error_msg = f"创建文档失败: {str(e)}"
+        error_msg = f"Failed to create document: {str(e)}"
         logger.error(error_msg)
         return error_msg
 
 @mcp.tool()
 def open_document(ctx: Context, file_path: str) -> str:
     """
-    打开一个现有的Word文档
+    Open an existing Word document
     
     Parameters:
-    - file_path: 要打开的文档路径
+    - file_path: Path to the document to open
     """
     try:
         if not os.path.exists(file_path):
-            return f"文件不存在: {file_path}"
+            return f"File does not exist: {file_path}"
         
         processor.current_document = Document(file_path)
         processor.current_file_path = file_path
         processor.documents[file_path] = processor.current_document
         
-        return f"成功打开文档: {file_path}"
+        return f"Document opened successfully: {file_path}"
     except Exception as e:
-        error_msg = f"打开文档失败: {str(e)}"
+        error_msg = f"Failed to open document: {str(e)}"
         logger.error(error_msg)
         return error_msg
 
 @mcp.tool()
 def save_document(ctx: Context) -> str:
     """
-    保存当前打开的Word文档到原文件（更新原文件）
+    Save the currently open Word document to the original file (update the original file)
     """
     try:
         if not processor.current_document:
-            return "没有打开的文档"
+            return "No document is open"
         
         if not processor.current_file_path:
-            return "当前文档未保存过，请使用save_as_document指定保存路径"
+            return "Current document has not been saved before, please use save_as_document to specify a save path"
             
-        # 保存到原文件路径
+        # Save to original file path
         processor.current_document.save(processor.current_file_path)
         
-        return f"成功保存文档到原文件: {processor.current_file_path}"
+        return f"Document saved successfully to original file: {processor.current_file_path}"
     except Exception as e:
-        error_msg = f"保存文档失败: {str(e)}"
+        error_msg = f"Failed to save document: {str(e)}"
         logger.error(error_msg)
         return error_msg
 
@@ -197,50 +222,50 @@ def add_paragraph(
     alignment: Optional[str] = None
 ) -> str:
     """
-    向文档添加段落文本
+    Add paragraph text to document
     
     Parameters:
-    - text: 段落文本内容
-    - bold: 是否加粗
-    - italic: 是否斜体
-    - underline: 是否下划线
-    - font_size: 字体大小（磅）
-    - font_name: 字体名称
-    - color: 文本颜色（格式如：#FF0000）
-    - alignment: 对齐方式 (left, center, right, justify)
+    - text: Paragraph text content
+    - bold: Whether to bold
+    - italic: Whether to italicize
+    - underline: Whether to underline
+    - font_size: Font size (points)
+    - font_name: Font name
+    - color: Text color (format: #FF0000)
+    - alignment: Alignment (left, center, right, justify)
     """
     try:
         if not processor.current_document:
-            return "没有打开的文档"
+            return "No document is open"
         
-        # 添加段落
+        # Add paragraph
         paragraph = processor.current_document.add_paragraph(text)
         
-        # 应用额外的格式
+        # Apply additional formatting
         if paragraph.runs:
             run = paragraph.runs[0]
             run.bold = bold
             run.italic = italic
             run.underline = underline
             
-            # 设置字体大小
+            # Set font size
             if font_size:
                 run.font.size = Pt(font_size)
             
-            # 设置字体名称
+            # Set font name
             if font_name:
                 run.font.name = font_name
-                # 设置中文字体
+                # Set East Asian font
                 run._element.rPr.rFonts.set(qn('w:eastAsia'), font_name)
             
-            # 设置字体颜色
+            # Set font color
             if color and color.startswith('#') and len(color) == 7:
                 r = int(color[1:3], 16)
                 g = int(color[3:5], 16)
                 b = int(color[5:7], 16)
                 run.font.color.rgb = RGBColor(r, g, b)
         
-        # 设置对齐方式
+        # Set alignment
         if alignment:
             if alignment == "left":
                 paragraph.alignment = WD_PARAGRAPH_ALIGNMENT.LEFT
@@ -251,50 +276,50 @@ def add_paragraph(
             elif alignment == "justify":
                 paragraph.alignment = WD_PARAGRAPH_ALIGNMENT.JUSTIFY
         
-        return "段落已添加"
+        return "Paragraph added"
     except Exception as e:
-        error_msg = f"添加段落失败: {str(e)}"
+        error_msg = f"Failed to add paragraph: {str(e)}"
         logger.error(error_msg)
         return error_msg
 
 @mcp.tool()
 def add_heading(ctx: Context, text: str, level: int) -> str:
     """
-    向文档添加标题
+    Add heading to document
     
     Parameters:
-    - text: 标题文本
-    - level: 标题级别（1-9）
+    - text: Heading text
+    - level: Heading level (1-9)
     """
     try:
         if not processor.current_document:
-            return "没有打开的文档"
+            return "No document is open"
         
         processor.current_document.add_heading(text, level=level)
         
-        return f"已添加级别为 {level} 的标题"
+        return f"Added level {level} heading"
     except Exception as e:
-        error_msg = f"添加标题失败: {str(e)}"
+        error_msg = f"Failed to add heading: {str(e)}"
         logger.error(error_msg)
         return error_msg
 
 @mcp.tool()
 def add_table(ctx: Context, rows: int, cols: int, data: Optional[list] = None) -> str:
     """
-    向文档添加表格
+    Add table to document
     
     Parameters:
-    - rows: 表格行数
-    - cols: 表格列数
-    - data: 表格数据，二维数组
+    - rows: Number of rows
+    - cols: Number of columns
+    - data: Table data, two-dimensional array
     """
     try:
         if not processor.current_document:
-            return "没有打开的文档"
+            return "No document is open"
         
         table = processor.current_document.add_table(rows=rows, cols=cols, style="Table Grid")
         
-        # 填充表格数据
+        # Fill table data
         if data:
             for i, row_data in enumerate(data):
                 if i < rows:
@@ -303,78 +328,78 @@ def add_table(ctx: Context, rows: int, cols: int, data: Optional[list] = None) -
                         if j < cols:
                             row.cells[j].text = str(cell_text)
         
-        return f"已添加 {rows}x{cols} 表格"
+        return f"Added {rows}x{cols} table"
     except Exception as e:
-        error_msg = f"添加表格失败: {str(e)}"
+        error_msg = f"Failed to add table: {str(e)}"
         logger.error(error_msg)
         return error_msg
 
 @mcp.tool()
 def get_document_info(ctx: Context) -> str:
     """
-    获取文档信息，包括段落数、表格数、样式等
+    Get document information, including paragraph count, table count, styles, etc.
     """
     try:
         if not processor.current_document:
-            return "没有打开的文档"
+            return "No document is open"
         
         doc = processor.current_document
         
-        # 获取文档基本信息
+        # Get basic document information
         sections_count = len(doc.sections)
         paragraphs_count = len(doc.paragraphs)
         tables_count = len(doc.tables)
         
-        # 获取样式列表
+        # Get style list
         paragraph_styles = []
         for style in doc.styles:
             if style.type == WD_STYLE_TYPE.PARAGRAPH:
                 paragraph_styles.append(style.name)
         
-        # 构建信息字符串
-        info = f"文档路径: {processor.current_file_path}\n"
-        info += f"节数量: {sections_count}\n"
-        info += f"段落数量: {paragraphs_count}\n"
-        info += f"表格数量: {tables_count}\n"
-        info += f"可用段落样式: {', '.join(paragraph_styles[:10])}..."
+        # Build information string
+        info = f"Document path: {processor.current_file_path}\n"
+        info += f"Section count: {sections_count}\n"
+        info += f"Paragraph count: {paragraphs_count}\n"
+        info += f"Table count: {tables_count}\n"
+        info += f"Available paragraph styles: {', '.join(paragraph_styles[:10])}..."
         
         return info
     except Exception as e:
-        error_msg = f"获取文档信息失败: {str(e)}"
+        error_msg = f"Failed to get document information: {str(e)}"
         logger.error(error_msg)
         return error_msg
 
 @mcp.tool()
 def search_text(ctx: Context, keyword: str) -> str:
     """
-    在文档中搜索文本
+    Search for text in the document
     
     Parameters:
-    - keyword: 要搜索的关键词
+    - keyword: Keyword to search for
     """
     try:
         if not processor.current_document:
-            return "没有打开的文档"
+            return "No document is open"
         
         doc = processor.current_document
         results = []
         
-        # 在段落中搜索
+        # Search in paragraphs
         for i, paragraph in enumerate(doc.paragraphs):
             if keyword in paragraph.text:
                 results.append({
-                    "type": "段落",
+                    "type": "paragraph",
                     "index": i,
                     "text": paragraph.text
                 })
         
-        # 在表格中搜索
+        # Search in tables
         for t_idx, table in enumerate(doc.tables):
             for r_idx, row in enumerate(table.rows):
                 for c_idx, cell in enumerate(row.cells):
                     if keyword in cell.text:
                         results.append({
-                            "type": "表格单元格",
+                            "type": "table cell",
                             "table_index": t_idx,
                             "row": r_idx,
                             "column": c_idx,
@@ -382,74 +407,74 @@ def search_text(ctx: Context, keyword: str) -> str:
                         })
         
         if not results:
-            return f"未找到关键词 '{keyword}'"
+            return f"Keyword '{keyword}' not found"
         
-        # 构建响应
-        response = f"找到 {len(results)} 处包含 '{keyword}' 的内容：\n\n"
+        # Build response
+        response = f"Found {len(results)} occurrences of '{keyword}':\n\n"
         for idx, result in enumerate(results):
             response += f"{idx+1}. {result['type']} "
-            if result['type'] == "段落":
-                response += f"索引 {result['index']}: {result['text'][:100]}"
+            if result['type'] == "paragraph":
+                response += f"index {result['index']}: {result['text'][:100]}"
                 if len(result['text']) > 100:
                     response += "..."
                 response += "\n"
             else:
-                response += f"在表格 {result['table_index']} 的单元格 ({result['row']},{result['column']}): {result['text'][:100]}"
+                response += f"in table {result['table_index']} at cell ({result['row']},{result['column']}): {result['text'][:100]}"
                 if len(result['text']) > 100:
                     response += "..."
                 response += "\n"
         
         return response
     except Exception as e:
-        error_msg = f"搜索文本失败: {str(e)}"
+        error_msg = f"Failed to search text: {str(e)}"
         logger.error(error_msg)
         return error_msg
 
 @mcp.tool()
 def search_and_replace(ctx: Context, keyword: str, replace_with: str, preview_only: bool = False) -> str:
     """
-    在文档中搜索文本并替换，提供详细的替换信息和预览选项
+    Search and replace text in the document, providing detailed replacement information and preview options
     
     Parameters:
-    - keyword: 要搜索的关键词
-    - replace_with: 替换为的文本
-    - preview_only: 是否仅预览而不实际替换，默认为False
+    - keyword: Keyword to search for
+    - replace_with: Text to replace with
+    - preview_only: Whether to only preview without actually replacing, default is False
     """
     try:
         if not processor.current_document:
-            return "没有打开的文档"
+            return "No document is open"
         
         doc = processor.current_document
         results = []
         
-        # 在段落中搜索
+        # Search in paragraphs
         for i, paragraph in enumerate(doc.paragraphs):
             if keyword in paragraph.text:
-                # 保存原始文本和替换后的文本
+                # Save original text and replaced text
                 original_text = paragraph.text
                 replaced_text = original_text.replace(keyword, replace_with)
                 results.append({
-                    "type": "段落",
+                    "type": "paragraph",
                     "index": i,
                     "original": original_text,
                     "replaced": replaced_text,
                     "count": original_text.count(keyword)
                 })
                 
-                # 如果不是预览模式，则执行替换
+                # If not in preview mode, perform replacement
                 if not preview_only:
                     paragraph.text = replaced_text
         
-        # 在表格中搜索
+        # Search in tables
         for t_idx, table in enumerate(doc.tables):
             for r_idx, row in enumerate(table.rows):
                 for c_idx, cell in enumerate(row.cells):
                     if keyword in cell.text:
-                        # 保存原始文本和替换后的文本
+                        # Save original text and replaced text
                         original_text = cell.text
                         replaced_text = original_text.replace(keyword, replace_with)
                         results.append({
-                            "type": "表格单元格",
+                            "type": "table cell",
                             "table_index": t_idx,
                             "row": r_idx,
                             "column": c_idx,
@@ -458,34 +483,34 @@ def search_and_replace(ctx: Context, keyword: str, replace_with: str, preview_on
                             "count": original_text.count(keyword)
                         })
                         
-                        # 如果不是预览模式，则执行替换
+                        # If not in preview mode, perform replacement
                         if not preview_only:
-                            # 替换表格单元格中的所有段落
+                            # Replace all paragraphs in the cell with the replaced text
                             for para in cell.paragraphs:
                                 if keyword in para.text:
                                     para.text = para.text.replace(keyword, replace_with)
         
         if not results:
-            return f"未找到关键词 '{keyword}'"
+            return f"Keyword '{keyword}' not found"
         
-        # 计算总替换次数
+        # Calculate total replacements
         total_replacements = sum(item["count"] for item in results)
         
-        # 构建响应
-        action_word = "预览" if preview_only else "替换"
-        response = f"{action_word}将 '{keyword}' 替换为 '{replace_with}'，共找到 {len(results)} 处位置，{total_replacements} 次出现：\n\n"
+        # Build response
+        action_word = "Preview" if preview_only else "Replace"
+        response = f"{action_word} '{keyword}' with '{replace_with}', found {len(results)} locations, {total_replacements} occurrences:\n\n"
         
         for idx, result in enumerate(results):
-            response += f"{idx+1}. 在{result['type']} "
-            if result['type'] == "段落":
-                response += f"索引 {result['index']} 中{action_word} {result['count']} 次:\n"
+            response += f"{idx+1}. In {result['type']} "
+            if result['type'] == "paragraph":
+                response += f"index {result['index']} {action_word.lower()}ing {result['count']} times:\n"
             else:
-                response += f"表格 {result['table_index']} 的单元格 ({result['row']},{result['column']}) 中{action_word} {result['count']} 次:\n"
+                response += f"table {result['table_index']} at cell ({result['row']},{result['column']}) {action_word.lower()}ing {result['count']} times:\n"
             
-            # 显示替换前后的文本片段（上下文）
+            # Display original and replaced text snippets (context)
             max_display = 50
             if len(result['original']) > max_display * 2:
-                # 查找关键词的位置并显示其周围的文本
+                # Find keyword position and display surrounding text
                 start_pos = result['original'].find(keyword)
                 start_pos = max(0, start_pos - max_display)
                 excerpt_original = "..." + result['original'][start_pos:start_pos + max_display * 2] + "..."
@@ -494,43 +519,43 @@ def search_and_replace(ctx: Context, keyword: str, replace_with: str, preview_on
                 excerpt_original = result['original']
                 excerpt_replaced = result['replaced']
             
-            response += f"  原文: {excerpt_original}\n"
-            response += f"  替换后: {excerpt_replaced}\n\n"
+            response += f"  Original: {excerpt_original}\n"
+            response += f"  Replaced: {excerpt_replaced}\n\n"
         
         if preview_only:
-            response += "这是替换预览，未实际执行替换。要执行替换，请将preview_only设置为False。"
+            response += "This is a preview of replacements. No actual changes were made. To execute replacements, set preview_only to False."
         else:
-            response += "替换已执行完成。"
+            response += "Replacements completed successfully."
         
         return response
     except Exception as e:
-        error_msg = f"搜索并替换失败: {str(e)}"
+        error_msg = f"Search and replace failed: {str(e)}"
         logger.error(error_msg)
         return error_msg
 
 @mcp.tool()
 def find_and_replace(ctx: Context, find_text: str, replace_text: str) -> str:
     """
-    在文档中查找并替换文本
+    Find and replace text in the document
     
     Parameters:
-    - find_text: 要查找的文本
-    - replace_text: 替换为的文本
+    - find_text: Text to find
+    - replace_text: Text to replace with
     """
     try:
         if not processor.current_document:
-            return "没有打开的文档"
+            return "No document is open"
         
         doc = processor.current_document
         replace_count = 0
         
-        # 在段落中查找和替换
+        # Find and replace in paragraphs
         for paragraph in doc.paragraphs:
             if find_text in paragraph.text:
                 paragraph.text = paragraph.text.replace(find_text, replace_text)
                 replace_count += paragraph.text.count(replace_text)
         
-        # 在表格中查找和替换
+        # Find and replace in tables
         for table in doc.tables:
             for row in table.rows:
                 for cell in row.cells:
@@ -539,9 +564,9 @@ def find_and_replace(ctx: Context, find_text: str, replace_text: str) -> str:
                             paragraph.text = paragraph.text.replace(find_text, replace_text)
                             replace_count += paragraph.text.count(replace_text)
         
-        return f"已将 '{find_text}' 替换为 '{replace_text}'，共替换 {replace_count} 处"
+        return f"Replaced '{find_text}' with '{replace_text}', {replace_count} occurrences"
     except Exception as e:
-        error_msg = f"查找替换失败: {str(e)}"
+        error_msg = f"Find and replace failed: {str(e)}"
         logger.error(error_msg)
         return error_msg
 
@@ -555,241 +580,241 @@ def merge_table_cells(
     end_col: int
 ) -> str:
     """
-    合并表格单元格
+    Merge table cells
     
     Parameters:
-    - table_index: 表格索引
-    - start_row: 起始行索引
-    - start_col: 起始列索引
-    - end_row: 结束行索引
-    - end_col: 结束列索引
+    - table_index: Table index
+    - start_row: Start row index
+    - start_col: Start column index
+    - end_row: End row index
+    - end_col: End column index
     """
     try:
         if not processor.current_document:
-            return "没有打开的文档"
+            return "No document is open"
         
         doc = processor.current_document
         
         if not doc.tables:
-            return "文档中没有表格"
+            return "No tables in document"
         
         if table_index < 0 or table_index >= len(doc.tables):
-            return f"表格索引超出范围: {table_index}，文档共有 {len(doc.tables)} 个表格"
+            return f"Table index out of range: {table_index}, document has {len(doc.tables)} tables"
         
         table = doc.tables[table_index]
         
-        # 检查行列索引是否有效
+        # Check if row and column indices are valid
         if start_row < 0 or start_row >= len(table.rows):
-            return f"起始行索引超出范围: {start_row}，表格共有 {len(table.rows)} 行"
+            return f"Start row index out of range: {start_row}, table has {len(table.rows)} rows"
         
         if start_col < 0 or start_col >= len(table.columns):
-            return f"起始列索引超出范围: {start_col}，表格共有 {len(table.columns)} 列"
+            return f"Start column index out of range: {start_col}, table has {len(table.columns)} columns"
         
         if end_row < start_row or end_row >= len(table.rows):
-            return f"结束行索引无效: {end_row}，应在 {start_row} 到 {len(table.rows)-1} 之间"
+            return f"End row index invalid: {end_row}, should be between {start_row} and {len(table.rows)-1}"
         
         if end_col < start_col or end_col >= len(table.columns):
-            return f"结束列索引无效: {end_col}，应在 {start_col} 到 {len(table.columns)-1} 之间"
+            return f"End column index invalid: {end_col}, should be between {start_col} and {len(table.columns)-1}"
         
-        # 获取起始单元格和结束单元格
+        # Get start and end cells
         start_cell = table.cell(start_row, start_col)
         end_cell = table.cell(end_row, end_col)
         
-        # 合并单元格
+        # Merge cells
         start_cell.merge(end_cell)
         
-        return f"已合并表格 {table_index} 的单元格从 ({start_row},{start_col}) 到 ({end_row},{end_col})"
+        return f"Merged cells in table {table_index} from ({start_row},{start_col}) to ({end_row},{end_col})"
     except Exception as e:
-        error_msg = f"合并表格单元格失败: {str(e)}"
+        error_msg = f"Failed to merge table cells: {str(e)}"
         logger.error(error_msg)
         return error_msg
 
 @mcp.tool()
 def split_table(ctx: Context, table_index: int, row_index: int) -> str:
     """
-    在指定行后拆分表格为两个表格
+    Split table into two tables at specified row
     
     Parameters:
-    - table_index: 表格索引
-    - row_index: 在此行后拆分表格
+    - table_index: Table index
+    - row_index: Split table after this row
     """
     try:
         if not processor.current_document:
-            return "没有打开的文档"
+            return "No document is open"
         
         doc = processor.current_document
         
         if not doc.tables:
-            return "文档中没有表格"
+            return "No tables in document"
         
         if table_index < 0 or table_index >= len(doc.tables):
-            return f"表格索引超出范围: {table_index}，文档共有 {len(doc.tables)} 个表格"
+            return f"Table index out of range: {table_index}, document has {len(doc.tables)} tables"
         
         table = doc.tables[table_index]
         
         if row_index < 0 or row_index >= len(table.rows) - 1:
-            return f"行索引无效: {row_index}，应在 0 到 {len(table.rows)-2} 之间"
+            return f"Row index invalid: {row_index}, should be between 0 and {len(table.rows)-2}"
         
-        # 使用底层XML操作拆分表格
-        # 获取表格元素
+        # Use XML operations to split table
+        # Get table element
         tbl = table._tbl
         
-        # 计算拆分位置
+        # Calculate split position
         split_position = row_index + 1
         
-        # 创建新表格元素
+        # Create new table element
         new_tbl = OxmlElement('w:tbl')
         
-        # 复制表格属性
+        # Copy table properties
         for child in tbl.xpath('./w:tblPr')[0].getchildren():
             new_tbl.append(child.copy())
         
-        # 复制表格网格设置
+        # Copy table grid settings
         for child in tbl.xpath('./w:tblGrid')[0].getchildren():
             new_tbl.append(child.copy())
         
-        # 移动行到新表格
+        # Move rows to new table
         rows = tbl.xpath('./w:tr')
         for i in range(split_position, len(rows)):
             new_tbl.append(rows[i])
         
-        # 在原表格后插入新表格
+        # Insert new table after original table
         tbl.addnext(new_tbl)
         
-        return f"已在行 {row_index} 后拆分表格 {table_index}"
+        return f"Split table {table_index} after row {row_index}"
     except Exception as e:
-        error_msg = f"拆分表格失败: {str(e)}"
+        error_msg = f"Failed to split table: {str(e)}"
         logger.error(error_msg)
         return error_msg
 
 @mcp.tool()
 def add_table_row(ctx: Context, table_index: int, data: Optional[list] = None) -> str:
     """
-    向表格添加一行
+    Add a row to table
     
     Parameters:
-    - table_index: 表格索引
-    - data: 行数据，列表形式
+    - table_index: Table index
+    - data: Row data in list format
     """
     try:
         if not processor.current_document:
-            return "没有打开的文档"
+            return "No document is open"
         
         doc = processor.current_document
         
         if not doc.tables:
-            return "文档中没有表格"
+            return "No tables in document"
         
         if table_index < 0 or table_index >= len(doc.tables):
-            return f"表格索引超出范围: {table_index}，文档共有 {len(doc.tables)} 个表格"
+            return f"Table index out of range: {table_index}, document has {len(doc.tables)} tables"
         
         table = doc.tables[table_index]
         
-        # 添加新行
+        # Add new row
         new_row = table.add_row()
         
-        # 填充行数据
+        # Fill row data
         if data:
             for i, cell_text in enumerate(data):
                 if i < len(new_row.cells):
                     new_row.cells[i].text = str(cell_text)
         
-        return f"已向表格 {table_index} 添加新行"
+        return f"Added new row to table {table_index}"
     except Exception as e:
-        error_msg = f"添加表格行失败: {str(e)}"
+        error_msg = f"Failed to add table row: {str(e)}"
         logger.error(error_msg)
         return error_msg
 
 @mcp.tool()
 def delete_table_row(ctx: Context, table_index: int, row_index: int) -> str:
     """
-    删除表格中的一行
+    Delete a row from table
     
     Parameters:
-    - table_index: 表格索引
-    - row_index: 要删除的行索引
+    - table_index: Table index
+    - row_index: Row index to delete
     """
     try:
         if not processor.current_document:
-            return "没有打开的文档"
+            return "No document is open"
         
         doc = processor.current_document
         
         if not doc.tables:
-            return "文档中没有表格"
+            return "No tables in document"
         
         if table_index < 0 or table_index >= len(doc.tables):
-            return f"表格索引超出范围: {table_index}，文档共有 {len(doc.tables)} 个表格"
+            return f"Table index out of range: {table_index}, document has {len(doc.tables)} tables"
         
         table = doc.tables[table_index]
         
         if row_index < 0 or row_index >= len(table.rows):
-            return f"行索引超出范围: {row_index}，表格共有 {len(table.rows)} 行"
+            return f"Row index out of range: {row_index}, table has {len(table.rows)} rows"
         
-        # 使用底层XML操作删除行
+        # Use XML operations to delete row
         row = table.rows[row_index]._tr
         row.getparent().remove(row)
         
-        return f"已删除表格 {table_index} 的第 {row_index} 行"
+        return f"Deleted row {row_index} from table {table_index}"
     except Exception as e:
-        error_msg = f"删除表格行失败: {str(e)}"
+        error_msg = f"Failed to delete table row: {str(e)}"
         logger.error(error_msg)
         return error_msg
 
 @mcp.tool()
 def edit_table_cell(ctx: Context, table_index: int, row_index: int, col_index: int, text: str) -> str:
     """
-    编辑表格单元格内容
+    Edit table cell content
     
     Parameters:
-    - table_index: 表格索引
-    - row_index: 行索引
-    - col_index: 列索引
-    - text: 单元格文本
+    - table_index: Table index
+    - row_index: Row index
+    - col_index: Column index
+    - text: Cell text
     """
     try:
         if not processor.current_document:
-            return "没有打开的文档"
+            return "No document is open"
         
         doc = processor.current_document
         
         if not doc.tables:
-            return "文档中没有表格"
+            return "No tables in document"
         
         if table_index < 0 or table_index >= len(doc.tables):
-            return f"表格索引超出范围: {table_index}，文档共有 {len(doc.tables)} 个表格"
+            return f"Table index out of range: {table_index}, document has {len(doc.tables)} tables"
         
         table = doc.tables[table_index]
         
         if row_index < 0 or row_index >= len(table.rows):
-            return f"行索引超出范围: {row_index}，表格共有 {len(table.rows)} 行"
+            return f"Row index out of range: {row_index}, table has {len(table.rows)} rows"
         
         if col_index < 0 or col_index >= len(table.columns):
-            return f"列索引超出范围: {col_index}，表格共有 {len(table.columns)} 列"
+            return f"Column index out of range: {col_index}, table has {len(table.columns)} columns"
         
-        # 修改单元格内容
+        # Modify cell content
         table.cell(row_index, col_index).text = text
         
-        return f"表格 {table_index} 的单元格 ({row_index}, {col_index}) 已修改"
+        return f"Cell ({row_index}, {col_index}) in table {table_index} has been modified"
     except Exception as e:
-        error_msg = f"编辑表格单元格失败: {str(e)}"
+        error_msg = f"Failed to edit table cell: {str(e)}"
         logger.error(error_msg)
         return error_msg
 
 @mcp.tool()
 def add_page_break(ctx: Context) -> str:
     """
-    添加分页符
+    Add page break
     """
     try:
         if not processor.current_document:
-            return "没有打开的文档"
+            return "No document is open"
         
         processor.current_document.add_page_break()
         
-        return "已添加分页符"
+        return "Page break added"
     except Exception as e:
-        error_msg = f"添加分页符失败: {str(e)}"
+        error_msg = f"Failed to add page break: {str(e)}"
         logger.error(error_msg)
         return error_msg
 
@@ -802,24 +827,24 @@ def set_page_margins(
     right: Optional[float] = None
 ) -> str:
     """
-    设置页面边距
+    Set page margins
     
     Parameters:
-    - top: 上边距（厘米）
-    - bottom: 下边距（厘米）
-    - left: 左边距（厘米）
-    - right: 右边距（厘米）
+    - top: Top margin (cm)
+    - bottom: Bottom margin (cm)
+    - left: Left margin (cm)
+    - right: Right margin (cm)
     """
     try:
         if not processor.current_document:
-            return "没有打开的文档"
+            return "No document is open"
         
         doc = processor.current_document
         
-        # 获取当前节（默认使用第一个节）
+        # Get current section (default to use first section)
         section = doc.sections[0]
         
-        # 设置页面边距
+        # Set page margins
         if top is not None:
             section.top_margin = Cm(top)
         if bottom is not None:
@@ -829,156 +854,156 @@ def set_page_margins(
         if right is not None:
             section.right_margin = Cm(right)
         
-        return "页面边距已设置"
+        return "Page margins set"
     except Exception as e:
-        error_msg = f"设置页面边距失败: {str(e)}"
+        error_msg = f"Failed to set page margins: {str(e)}"
         logger.error(error_msg)
         return error_msg
 
 @mcp.tool()
 def delete_paragraph(ctx: Context, paragraph_index: int) -> str:
     """
-    删除文档中的指定段落
+    Delete specified paragraph from document
     
     Parameters:
-    - paragraph_index: 要删除的段落索引
+    - paragraph_index: Paragraph index to delete
     """
     try:
         if not processor.current_document:
-            return "没有打开的文档"
+            return "No document is open"
         
         doc = processor.current_document
         
         if paragraph_index < 0 or paragraph_index >= len(doc.paragraphs):
-            return f"段落索引超出范围: {paragraph_index}，文档共有 {len(doc.paragraphs)} 个段落"
+            return f"Paragraph index out of range: {paragraph_index}, document has {len(doc.paragraphs)} paragraphs"
         
-        # python-docx不提供直接删除段落的方法，需要使用底层XML操作
+        # python-docx does not provide a direct method to delete a paragraph, use XML operations
         paragraph = doc.paragraphs[paragraph_index]
         p = paragraph._element
         p.getparent().remove(p)
-        # 删除段落对象的引用，以便垃圾回收
+        # Delete paragraph object reference for garbage collection
         paragraph._p = None
         paragraph._element = None
         
-        return f"段落 {paragraph_index} 已删除"
+        return f"Paragraph {paragraph_index} deleted"
     except Exception as e:
-        error_msg = f"删除段落失败: {str(e)}"
+        error_msg = f"Failed to delete paragraph: {str(e)}"
         logger.error(error_msg)
         return error_msg
 
 @mcp.tool()
 def delete_text(ctx: Context, paragraph_index: int, start_pos: int, end_pos: int) -> str:
     """
-    删除文档中指定段落的部分文本
+    Delete specified text from paragraph
     
     Parameters:
-    - paragraph_index: 段落索引
-    - start_pos: 开始位置（从0开始计数）
-    - end_pos: 结束位置（不包含该位置的字符）
+    - paragraph_index: Paragraph index
+    - start_pos: Start position (0-based index)
+    - end_pos: End position (not included in the text)
     """
     try:
         if not processor.current_document:
-            return "没有打开的文档"
+            return "No document is open"
         
         doc = processor.current_document
         
         if paragraph_index < 0 or paragraph_index >= len(doc.paragraphs):
-            return f"段落索引超出范围: {paragraph_index}，文档共有 {len(doc.paragraphs)} 个段落"
+            return f"Paragraph index out of range: {paragraph_index}, document has {len(doc.paragraphs)} paragraphs"
         
         paragraph = doc.paragraphs[paragraph_index]
         text = paragraph.text
         
         if start_pos < 0 or start_pos >= len(text):
-            return f"起始位置超出范围: {start_pos}，段落长度为 {len(text)}"
+            return f"Start position out of range: {start_pos}, paragraph length is {len(text)}"
         
         if end_pos <= start_pos or end_pos > len(text):
-            return f"结束位置无效: {end_pos}，应在 {start_pos+1} 到 {len(text)} 之间"
+            return f"End position invalid: {end_pos}, should be between {start_pos+1} and {len(text)}"
         
-        # 构建新文本（删除指定部分）
+        # Build new text (delete specified text)
         new_text = text[:start_pos] + text[end_pos:]
         paragraph.text = new_text
         
-        return f"已删除段落 {paragraph_index} 中从位置 {start_pos} 到 {end_pos} 的文本"
+        return f"Deleted text from position {start_pos} to {end_pos} in paragraph {paragraph_index}"
     except Exception as e:
-        error_msg = f"删除文本失败: {str(e)}"
+        error_msg = f"Failed to delete text: {str(e)}"
         logger.error(error_msg)
         return error_msg
 
 @mcp.tool()
 def save_as_document(ctx: Context, new_file_path: str) -> str:
     """
-    将当前文档保存为新文件
+    Save current document as a new file
     
     Parameters:
-    - new_file_path: 新文件保存路径
+    - new_file_path: Path to save the new file
     """
     try:
         if not processor.current_document:
-            return "没有打开的文档"
+            return "No document is open"
         
-        # 保存为新文件
+        # Save as new file
         processor.current_document.save(new_file_path)
         
-        # 更新当前文件路径
+        # Update current file path
         processor.current_file_path = new_file_path
         processor.documents[new_file_path] = processor.current_document
         
-        return f"文档已保存为: {new_file_path}"
+        return f"Document saved as: {new_file_path}"
     except Exception as e:
-        error_msg = f"保存文档失败: {str(e)}"
+        error_msg = f"Failed to save document: {str(e)}"
         logger.error(error_msg)
         return error_msg
 
 @mcp.tool()
 def create_document_copy(ctx: Context, suffix: str = "-副本") -> str:
     """
-    在原文件所在目录创建当前文档的副本
+    Create a copy of the current document in the directory of the original file
     
     Parameters:
-    - suffix: 添加到原文件名后的后缀，默认为"-副本"
+    - suffix: Suffix to add to the original file name, default is "-副本"
     """
     try:
         if not processor.current_document:
-            return "没有打开的文档"
+            return "No document is open"
         
         if not processor.current_file_path:
-            return "当前文档未保存，无法创建副本"
+            return "Current document has not been saved, cannot create a copy"
         
-        # 解析原文件路径
+        # Parse original file path
         file_dir = os.path.dirname(processor.current_file_path)
         file_name = os.path.basename(processor.current_file_path)
         file_name_without_ext, file_ext = os.path.splitext(file_name)
         
-        # 创建新文件名
+        # Create new file name
         new_file_name = f"{file_name_without_ext}{suffix}{file_ext}"
         new_file_path = os.path.join(file_dir, new_file_name)
         
-        # 保存为新文件
+        # Save as new file
         processor.current_document.save(new_file_path)
         
-        return f"已创建文档副本: {new_file_path}"
+        return f"Document copy created: {new_file_path}"
     except Exception as e:
-        error_msg = f"创建文档副本失败: {str(e)}"
+        error_msg = f"Failed to create document copy: {str(e)}"
         logger.error(error_msg)
         return error_msg
 
 @mcp.tool()
 def replace_section(ctx: Context, section_title: str, new_content: list, preserve_title: bool = True) -> str:
     """
-    在文档中查找特定标题并替换该标题下的内容，保持原有位置、格式和样式
+    Find specified title in document and replace content under that title, keeping original position, format, and style
     
     Parameters:
-    - section_title: 要查找的标题文本
-    - new_content: 新内容列表，每个元素是一个段落
-    - preserve_title: 是否保留原标题，默认为True
+    - section_title: Title text to find
+    - new_content: New content list, each element is a paragraph
+    - preserve_title: Whether to keep original title, default is True
     """
     try:
         if not processor.current_document:
-            return "没有打开的文档"
+            return "No document is open"
         
         doc = processor.current_document
         
-        # 查找标题位置
+        # Find title position
         title_index = -1
         for i, paragraph in enumerate(doc.paragraphs):
             if section_title in paragraph.text:
@@ -986,20 +1011,20 @@ def replace_section(ctx: Context, section_title: str, new_content: list, preserv
                 break
         
         if title_index == -1:
-            return f"未找到标题: '{section_title}'"
+            return f"Title not found: '{section_title}'"
         
-        # 确定该部分的结束位置（下一个相同或更高级别的标题）
+        # Determine end position of that section (next same or higher level title)
         end_index = len(doc.paragraphs)
         title_style = doc.paragraphs[title_index].style
         
         for i in range(title_index + 1, len(doc.paragraphs)):
-            # 如果找到下一个相同级别或更高级别的标题，则设置为结束位置
+            # If next same level or higher level title found, set as end position
             if doc.paragraphs[i].style.name.startswith('Heading') and \
                (doc.paragraphs[i].style.name <= title_style.name or doc.paragraphs[i].style == title_style):
                 end_index = i
                 break
         
-        # 保存原始段落的样式和格式信息
+        # Save original paragraph style and format information
         original_styles = []
         for i in range(start_delete := (title_index + (1 if preserve_title else 0)), min(end_index, start_delete + len(new_content))):
             if i < len(doc.paragraphs):
@@ -1010,7 +1035,7 @@ def replace_section(ctx: Context, section_title: str, new_content: list, preserv
                     'runs': []
                 }
                 
-                # 保存每个run的格式
+                # Save each run format
                 for run in para.runs:
                     run_info = {
                         'bold': run.bold,
@@ -1024,18 +1049,18 @@ def replace_section(ctx: Context, section_title: str, new_content: list, preserv
                 
                 original_styles.append(style_info)
             else:
-                # 如果原始段落数量不足，使用最后一个段落的样式
+                # If original paragraph count is insufficient, use last paragraph style
                 if original_styles:
                     original_styles.append(original_styles[-1])
                 else:
-                    # 如果没有原始样式，使用默认样式
+                    # If no original style, use default style
                     original_styles.append({
                         'style': None,
                         'alignment': None,
                         'runs': []
                     })
         
-        # 如果原始样式数量不足，使用最后一个样式填充
+        # If original style count is insufficient, use last style to fill
         while len(original_styles) < len(new_content):
             if original_styles:
                 original_styles.append(original_styles[-1])
@@ -1046,30 +1071,30 @@ def replace_section(ctx: Context, section_title: str, new_content: list, preserv
                     'runs': []
                 })
         
-        # 记录插入位置
+        # Record insert position
         insert_position = start_delete
         
-        # 从后向前删除，避免索引变化
+        # Delete from end to avoid index change
         for i in range(end_index - 1, start_delete - 1, -1):
             p = doc.paragraphs[i]._element
             p.getparent().remove(p)
         
-        # 添加新内容，应用原始格式
+        # Add new content, apply original format
         for i, content in enumerate(reversed(new_content)):
-            # 创建新段落
+            # Create new paragraph
             p = doc.add_paragraph()
             
-            # 应用原始段落样式
+            # Apply original paragraph style
             style_info = original_styles[len(new_content) - i - 1]
             if style_info['style']:
                 p.style = style_info['style']
             if style_info['alignment'] is not None:
                 p.alignment = style_info['alignment']
             
-            # 添加文本并应用格式
+            # Add text and apply format
             if style_info['runs'] and len(style_info['runs']) > 0:
-                # 如果有多个run，尝试保持格式
-                # 简化处理：将整个内容添加到一个run中，应用第一个run的格式
+                # If multiple runs, try to keep format
+                # Simplified processing: Add entire content to a run, apply format from first run
                 run = p.add_run(content)
                 run_info = style_info['runs'][0]
                 
@@ -1082,61 +1107,61 @@ def replace_section(ctx: Context, section_title: str, new_content: list, preserv
                 
                 if run_info['font_name']:
                     run.font.name = run_info['font_name']
-                    # 设置中文字体
+                    # Set Chinese font
                     run._element.rPr.rFonts.set(qn('w:eastAsia'), run_info['font_name'])
                 
                 if run_info['color']:
                     run.font.color.rgb = run_info['color']
             else:
-                # 如果没有run信息，直接添加文本
+                # If no run information, add text directly
                 p.text = content
             
-            # 移动新段落到正确位置
+            # Move new paragraph to correct position
             doc._body._body.insert(insert_position, p._p)
             
-            # 删除原来添加的段落（在文档末尾）
+            # Delete original added paragraph (at end of document)
             doc._body._body.remove(doc.paragraphs[-1]._p)
         
-        return f"已替换标题 '{section_title}' 下的内容，保留了原有格式和样式"
+        return f"Replaced content under title '{section_title}', keeping original format and style"
     except Exception as e:
-        error_msg = f"替换内容失败: {str(e)}"
+        error_msg = f"Failed to replace content: {str(e)}"
         logger.error(error_msg)
-        traceback.print_exc()  # 打印详细错误信息
+        traceback.print_exc()  # Print detailed error information
         return error_msg
 
 @mcp.tool()
 def edit_section_by_keyword(ctx: Context, keyword: str, new_content: list, section_range: int = 3) -> str:
     """
-    在文档中查找包含关键词的段落，并替换该段落及其周围内容，保持原有位置、格式和样式
+    Find paragraphs containing specified keyword and replace them and their surrounding content, keeping original position, format, and style
     
     Parameters:
-    - keyword: 要查找的关键词
-    - new_content: 新内容列表，每个元素是一个段落
-    - section_range: 要替换的关键词周围段落范围，默认为3
+    - keyword: Keyword to find
+    - new_content: New content list, each element is a paragraph
+    - section_range: Surrounding paragraph range to replace, default is 3
     """
     try:
         if not processor.current_document:
-            return "没有打开的文档"
+            return "No document is open"
         
         doc = processor.current_document
         
-        # 查找关键词位置
+        # Find keyword position
         keyword_indices = []
         for i, paragraph in enumerate(doc.paragraphs):
             if keyword in paragraph.text:
                 keyword_indices.append(i)
         
         if not keyword_indices:
-            return f"未找到关键词: '{keyword}'"
+            return f"Keyword not found: '{keyword}'"
         
-        # 使用第一个匹配项
+        # Use first match
         keyword_index = keyword_indices[0]
         
-        # 确定要替换的段落范围
+        # Determine paragraph range to replace
         start_index = max(0, keyword_index - section_range)
         end_index = min(len(doc.paragraphs), keyword_index + section_range + 1)
         
-        # 保存原始段落的样式和格式信息
+        # Save original paragraph style and format information
         original_styles = []
         for i in range(start_index, min(end_index, start_index + len(new_content))):
             if i < len(doc.paragraphs):
@@ -1147,7 +1172,7 @@ def edit_section_by_keyword(ctx: Context, keyword: str, new_content: list, secti
                     'runs': []
                 }
                 
-                # 保存每个run的格式
+                # Save each run format
                 for run in para.runs:
                     run_info = {
                         'bold': run.bold,
@@ -1161,18 +1186,18 @@ def edit_section_by_keyword(ctx: Context, keyword: str, new_content: list, secti
                 
                 original_styles.append(style_info)
             else:
-                # 如果原始段落数量不足，使用最后一个段落的样式
+                # If original paragraph count is insufficient, use last paragraph style
                 if original_styles:
                     original_styles.append(original_styles[-1])
                 else:
-                    # 如果没有原始样式，使用默认样式
+                    # If no original style, use default style
                     original_styles.append({
                         'style': None,
                         'alignment': None,
                         'runs': []
                     })
         
-        # 如果原始样式数量不足，使用最后一个样式填充
+        # If original style count is insufficient, use last style to fill
         while len(original_styles) < len(new_content):
             if original_styles:
                 original_styles.append(original_styles[-1])
@@ -1183,30 +1208,30 @@ def edit_section_by_keyword(ctx: Context, keyword: str, new_content: list, secti
                     'runs': []
                 })
         
-        # 记录插入位置
+        # Record insert position
         insert_position = start_index
         
-        # 从后向前删除，避免索引变化
+        # Delete from end to avoid index change
         for i in range(end_index - 1, start_index - 1, -1):
             p = doc.paragraphs[i]._element
             p.getparent().remove(p)
         
-        # 添加新内容，应用原始格式
+        # Add new content, apply original format
         for i, content in enumerate(reversed(new_content)):
-            # 创建新段落
+            # Create new paragraph
             p = doc.add_paragraph()
             
-            # 应用原始段落样式
+            # Apply original paragraph style
             style_info = original_styles[len(new_content) - i - 1]
             if style_info['style']:
                 p.style = style_info['style']
             if style_info['alignment'] is not None:
                 p.alignment = style_info['alignment']
             
-            # 添加文本并应用格式
+            # Add text and apply format
             if style_info['runs'] and len(style_info['runs']) > 0:
-                # 如果有多个run，尝试保持格式
-                # 简化处理：将整个内容添加到一个run中，应用第一个run的格式
+                # If multiple runs, try to keep format
+                # Simplified processing: Add entire content to a run, apply format from first run
                 run = p.add_run(content)
                 run_info = style_info['runs'][0]
                 
@@ -1219,30 +1244,38 @@ def edit_section_by_keyword(ctx: Context, keyword: str, new_content: list, secti
                 
                 if run_info['font_name']:
                     run.font.name = run_info['font_name']
-                    # 设置中文字体
+                    # Set Chinese font
                     run._element.rPr.rFonts.set(qn('w:eastAsia'), run_info['font_name'])
                 
                 if run_info['color']:
                     run.font.color.rgb = run_info['color']
             else:
-                # 如果没有run信息，直接添加文本
+                # If no run information, add text directly
                 p.text = content
             
-            # 移动新段落到正确位置
+            # Move new paragraph to correct position
             doc._body._body.insert(insert_position, p._p)
             
-            # 删除原来添加的段落（在文档末尾）
+            # Delete original added paragraph (at end of document)
             doc._body._body.remove(doc.paragraphs[-1]._p)
         
-        return f"已替换包含关键词 '{keyword}' 的段落及其周围内容，保留了原有格式和样式"
+        return f"Replaced paragraphs containing keyword '{keyword}' and their surrounding content, keeping original format and style"
     except Exception as e:
-        error_msg = f"替换内容失败: {str(e)}"
+        error_msg = f"Failed to replace content: {str(e)}"
         logger.error(error_msg)
-        traceback.print_exc()  # 打印详细错误信息
+        traceback.print_exc()  # Print detailed error information
         return error_msg
 
-# 添加更多工具...
+# Add more tools...
 
 if __name__ == "__main__":
-    # 运行MCP服务器
+    # Always start with a clean state, don't try to load any previous document
+    if os.path.exists(CURRENT_DOC_FILE):
+        try:
+            os.remove(CURRENT_DOC_FILE)
+            logger.info("Removed existing state file for clean startup")
+        except Exception as e:
+            logger.error(f"Failed to remove existing state file: {e}")
+    
+    # Run MCP server
     mcp.run() 
