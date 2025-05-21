@@ -45,7 +45,7 @@ logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s - %(filename)s:%(lineno)d",
     handlers=[
         logging.FileHandler(os.path.join(tempfile.gettempdir(), "docx_mcp_server.log")),
-        logging.StreamHandler(sys.stderr)  # Changed to stdout for better visibility
+        logging.StreamHandler(sys.stdout)  # Changed to stdout for better visibility
     ]
 )
 logger = logging.getLogger("DocxMCPServer")
@@ -233,10 +233,10 @@ class DocxProcessor:
                         "font_size_pt": font.size.pt if font.size and hasattr(font.size, 'pt') else None,
                         "font_color_rgb": str(font.color.rgb) if font.color and font.color.rgb else None
                     })
-                
-                content_blocks.append(block_info)
-                block_id_counter += 1
             
+            content_blocks.append(block_info)
+            block_id_counter += 1
+
             elif isinstance(child_element, CT_Tbl):
                 # --- Process Table --- 
                 try:
@@ -475,8 +475,10 @@ class DocxProcessor:
                 available_style_names = [s.name for s in self.current_document.styles]
                 if original_para_style_name in available_style_names:
                     if para_to_edit.style.name != original_para_style_name:
-                        para_to_edit.style = self.current_document.styles[original_para_style_name]
+                         para_to_edit.style = self.current_document.styles[original_para_style_name]
                         logger.debug(f"Applied style '{original_para_style_name}'.")
+                else:
+                        logger.warning(f"Style '{original_para_style_name}' not found. Current: '{para_to_edit.style.name}'.")
                 else:
                     logger.warning(f"Style '{original_para_style_name}' not found. Current: '{para_to_edit.style.name}'.")
             except Exception as e_style:
@@ -751,41 +753,6 @@ direct_http_app = StarletteApp(routes=[
     HttpRoute("/api/save_as_document", http_save_as_document, methods=["POST"]),
 ])
 
-# Uvicorn logging configuration to output to stderr
-UVICORN_LOGGING_CONFIG = {
-    "version": 1,
-    "disable_existing_loggers": False,
-    "formatters": {
-        "default": {
-            "()": "uvicorn.logging.DefaultFormatter",
-            "fmt": "%(levelprefix)s %(message)s",
-            "use_colors": None,
-        },
-        "access": {
-            "()": "uvicorn.logging.AccessFormatter",
-            # Exclude client_addr and request_line for cleaner MCP logs, keep status_code
-            "fmt": '''%(levelprefix)s %(status_code)s''',
-        },
-    },
-    "handlers": {
-        "default": {
-            "formatter": "default",
-            "class": "logging.StreamHandler",
-            "stream": "ext://sys.stderr",
-        },
-        "access": {
-            "formatter": "access",
-            "class": "logging.StreamHandler",
-            "stream": "ext://sys.stderr",
-        },
-    },
-    "loggers": {
-        "uvicorn": {"handlers": ["default"], "level": "INFO", "propagate": False},
-        "uvicorn.error": {"handlers": ["default"], "level": "INFO", "propagate": False}, # Ensure uvicorn errors also use the default handler (stderr)
-        "uvicorn.access": {"handlers": ["access"], "level": "WARNING", "propagate": False}, # Reduce verbosity of access logs or set level to ERROR
-    },
-}
-
 if __name__ == "__main__":
     logger.info("Attempting to start DocxProcessor server with combined MCP-SSE and Direct HTTP interfaces.")
     if os.path.exists(CURRENT_DOC_FILE):
@@ -807,7 +774,7 @@ if __name__ == "__main__":
         # Mount the direct HTTP API
         main_app.mount("/", app=direct_http_app) # Mount direct API at root or another path like /direct_api
 
-        uvicorn.run(main_app, host="0.0.0.0", port=8001, log_config=UVICORN_LOGGING_CONFIG)
+        uvicorn.run(main_app, host="0.0.0.0", port=8001, log_level="info")
         
         logger.info("Uvicorn server with combined interfaces has finished or exited.") 
     except Exception as e:
